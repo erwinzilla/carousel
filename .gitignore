@@ -1,0 +1,34 @@
+# Node modules
+node_modules/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Env
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build / temp
+dist/
+build/
+temp/
+tmp/
+
+# PDF output (PENTING)
+*.pdf
+
+# Puppeteer cache (optional)
+.cache/
+puppeteer-cache/
+
+# VSCode
+.vscode/
+
+# Misc
+*.log
