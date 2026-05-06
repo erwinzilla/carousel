@@ -17,10 +17,10 @@ async function generatePdf(url, outputPath) {
     printBackground: true,
     scale: 0.95,
     margin: {
-        top: "5mm",
-        bottom: "5mm",
-        left: "5mm",
-        right: "5mm",
+      top: "5mm",
+      bottom: "5mm",
+      left: "5mm",
+      right: "5mm",
     },
   });
 

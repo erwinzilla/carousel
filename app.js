@@ -33,7 +33,7 @@ app.post("/print-job", async (req, res) => {
     await mergePdf(job1Path, job2Path, finalPath);
 
     // 🔥 4. Print
-    // await printFile(finalPath);
+    await printFile(finalPath);
 
     // res.json({ status: "printed" });
     res.json({

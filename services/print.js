@@ -2,8 +2,14 @@ const { print } = require("pdf-to-printer");
 
 async function printFile(path) {
   await print(path, {
-    printer: "HP LaserJet M402", // sesuaikan dengan nama di Windows
+    printer: "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6", // sesuaikan dengan nama di Windows
   });
+
+  // getPrinters().then((printers) => {
+  //   console.log(printers);
+  // });
+
+  // await print(path);
 }
 
 module.exports = { printFile };
