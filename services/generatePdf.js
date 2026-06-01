@@ -17,6 +17,10 @@ async function generatePdf(url, outputPath) {
     waitUntil: "networkidle0",
   });
 
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+  });
+
   await page.pdf({
     path: outputPath,
     format: "A4",
