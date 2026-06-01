@@ -12,7 +12,7 @@ app.use(express.json());
 
 app.post("/print-job", async (req, res) => {
   try {
-    const { jobId } = req.body;
+    const { token, jobId } = req.body;
 
     const tempDir = path.join(__dirname, "temp");
 
@@ -24,10 +24,10 @@ app.post("/print-job", async (req, res) => {
     // 🔥 1. Download Cakrawala (via Laravel proxy)
     const job1Url = `https://erwinzilla.com/api/cakrawala/invoices/${jobId}/nota-invoice`;
 
-    await downloadFile(job1Url, job1Path);
+    await downloadFile(job1Url, job1Path, token);
 
     // 🔥 2. Generate Tornado PDF
-    const job2Url = `https://pts.erwinzilla.com/work-order/${jobId}/print`;
+    const job2Url = `https://pts.erwinzilla.com/work-order/${jobId}/print?token=${token}`;
 
     await generatePdf(job2Url, job2Path);
 
