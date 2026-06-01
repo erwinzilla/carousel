@@ -4,7 +4,7 @@ const path = require("path");
 const { downloadFile } = require("./services/download");
 const { generatePdf } = require("./services/generatePdf");
 const { mergePdf } = require("./services/mergePdf");
-const { printFile } = require("./services/print");
+// const { printFile } = require("./services/print");
 
 const app = express();
 app.use(express.json());
@@ -33,7 +33,7 @@ app.post("/print-job", async (req, res) => {
     await mergePdf(job1Path, job2Path, finalPath);
 
     // 🔥 4. Print
-    await printFile(finalPath);
+    // await printFile(finalPath);
 
     // res.json({ status: "printed" });
     res.json({
