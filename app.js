@@ -83,7 +83,7 @@ app.post("/print-loan", async (req, res) => {
     const path = path.join(tempDir, `loan-${unique}.pdf`);
 
     // 🔥 2. Generate Tornado PDF
-    const loanUrl = `https://pts.erwinzilla.com/loan/${jobId}/print?token=${token}`;
+    const loanUrl = `https://pts.erwinzilla.com/loan/${loanId}/print?token=${token}`;
     await generatePdf(loanUrl, path);
 
     if (!fs.existsSync(path)) {
