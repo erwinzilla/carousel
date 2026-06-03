@@ -80,24 +80,24 @@ app.post("/print-loan", async (req, res) => {
     const tempDir = path.join(__dirname, "temp");
 
     const unique = `${loanId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    const path = path.join(tempDir, `loan-${unique}.pdf`);
+    const finalPath = path.join(tempDir, `loan-${unique}.pdf`);
 
     // 🔥 2. Generate Tornado PDF
     const loanUrl = `https://pts.erwinzilla.com/loan/${loanId}/print?token=${token}`;
-    await generatePdf(loanUrl, path);
+    await generatePdf(loanUrl, finalPath);
 
-    if (!fs.existsSync(path)) {
+    if (!fs.existsSync(finalPath)) {
       return res.status(500).json({ error: "PDF_NOT_FOUND" });
     }
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `inline; filename=loan-${unique}.pdf`);
-    res.sendFile(path, (err) => {
+    res.sendFile(finalPath, (err) => {
       if (err) {
         console.error("SendFile error:", err);
       }
 
-      fs.unlink(path, (err) => {
+      fs.unlink(finalPath, (err) => {
         if (err) console.error("Failed delete loan:", err);
       });
     });
