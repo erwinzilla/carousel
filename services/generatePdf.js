@@ -23,7 +23,7 @@ async function generatePdf(url, outputPath, paper = "A4") {
 
   await page.pdf({
     path: outputPath,
-    format: paper,
+    ...(typeof paper === "string" ? { format: paper } : paper),
     printBackground: true,
     scale: 0.95,
     margin: {
