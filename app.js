@@ -73,6 +73,40 @@ app.post("/print-job", async (req, res) => {
   }
 });
 
+app.post("/print-loan", async (req, res) => {
+  try {
+    const { token, loanId } = req.body;
+
+    const tempDir = path.join(__dirname, "temp");
+
+    const unique = `${loanId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const path = path.join(tempDir, `loan-${unique}.pdf`);
+
+    // 🔥 2. Generate Tornado PDF
+    const loanUrl = `https://pts.erwinzilla.com/loan/${jobId}/print?token=${token}`;
+    await generatePdf(loanUrl, path);
+
+    if (!fs.existsSync(path)) {
+      return res.status(500).json({ error: "PDF_NOT_FOUND" });
+    }
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `inline; filename=loan-${unique}.pdf`);
+    res.sendFile(path, (err) => {
+      if (err) {
+        console.error("SendFile error:", err);
+      }
+
+      fs.unlink(path, (err) => {
+        if (err) console.error("Failed delete loan:", err);
+      });
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "ERROR_GENERATE_PDF" });
+  }
+});
+
 app.listen(3000, () => {
   console.log("Print Service running on port 3000");
 });
