@@ -84,7 +84,7 @@ app.post("/print-loan", async (req, res) => {
 
     // 🔥 2. Generate Tornado PDF
     const loanUrl = `https://pts.erwinzilla.com/loan/${loanId}/print?token=${token}`;
-    await generatePdf(loanUrl, finalPath);
+    await generatePdf(loanUrl, finalPath, "");
 
     if (!fs.existsSync(finalPath)) {
       return res.status(500).json({ error: "PDF_NOT_FOUND" });

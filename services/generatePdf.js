@@ -1,6 +1,6 @@
 const puppeteer = require("puppeteer");
 
-async function generatePdf(url, outputPath) {
+async function generatePdf(url, outputPath, paper = "A4") {
   const browser = await puppeteer.launch({
     headless: "new",
     args: [
@@ -23,7 +23,7 @@ async function generatePdf(url, outputPath) {
 
   await page.pdf({
     path: outputPath,
-    format: "A4",
+    format: paper,
     printBackground: true,
     scale: 0.95,
     margin: {
