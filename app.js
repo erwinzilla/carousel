@@ -190,7 +190,7 @@ app.post("/print-loan", async (req, res) => {
     } = req.body; // ← Tambahkan parameter print
 
     console.log(
-      `📨 Received loan request: ${loanId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
+      `📨 Received print-loan request: ${loanId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
     );
 
     const tempDir = path.join(__dirname, "temp");
@@ -211,45 +211,80 @@ app.post("/print-loan", async (req, res) => {
     if (directPrint === true || directPrint === "true") {
       // Mode PRINT
       const agentSocket = agents.get(agentId);
-      if (!agentSocket) {
-        return res.status(404).json({ error: "Printer agent not connected" });
-      }
 
       const pdfBuffer = fs.readFileSync(finalPath);
       const pdfBase64 = pdfBuffer.toString("base64");
 
-      const printJobId = `loan-${loanId}-${Date.now()}`;
+      if (agentSocket) {
+        // === CASE 1: AGENT ONLINE → LANGSUNG PRINT ===
+        console.log(`✅ Agent ${agentId} online, printing immediately...`);
 
-      agentSocket.emit("print-command", {
-        jobId: printJobId,
-        pdfBase64: pdfBase64,
-        fileName: `loan-${loanId}.pdf`,
-      });
+        const printJobId = `loan-${loanId}-${Date.now()}`;
 
-      const printPromise = new Promise((resolve, reject) => {
-        pendingJobs.set(printJobId, { resolve, reject });
+        agentSocket.emit("print-command", {
+          jobId: printJobId,
+          pdfBase64: pdfBase64,
+          fileName: `loan-${loanId}.pdf`,
+        });
 
-        setTimeout(() => {
-          if (pendingJobs.has(printJobId)) {
-            pendingJobs.delete(printJobId);
-            reject(new Error("Print timeout"));
-          }
-        }, 30000);
-      });
+        const printPromise = new Promise((resolve, reject) => {
+          pendingJobs.set(printJobId, { resolve, reject });
 
-      await printPromise;
+          setTimeout(() => {
+            if (pendingJobs.has(printJobId)) {
+              pendingJobs.delete(printJobId);
+              reject(new Error("Print timeout"));
+            }
+          }, 30000);
+        });
 
-      fs.unlink(
-        finalPath,
-        (err) => err && console.error(`Failed delete: ${finalPath}`),
-      );
+        await printPromise;
 
-      res.json({
-        status: "success",
-        message: "Loan printed successfully",
-        mode: "print",
-        loanId: loanId,
-      });
+        fs.unlink(
+          finalPath,
+          (err) => err && console.error(`Failed delete: ${finalPath}`),
+        );
+
+        res.json({
+          status: "success",
+          message: "Printed immediately",
+          mode: "direct",
+        });
+      } else {
+        // === CASE 2: AGENT OFFLINE → MASUKKAN KE QUEUE ===
+        console.log(`⚠️ Agent ${agentId} offline, adding to queue...`);
+
+        // Simpan ke queue
+        const queuedJob = printQueue.addJob({
+          jobId: jobId,
+          agentId: agentId,
+          pdfBase64: pdfBase64,
+          fileName: `job-${jobId}.pdf`,
+          originalJobId: jobId,
+          timestamp: Date.now(),
+        });
+
+        // Simpan PDF sementara (optional, kalau queue besar bisa simpan di disk)
+        const queuedPdfPath = path.join(
+          __dirname,
+          `queued_${queuedJob.id}.pdf`,
+        );
+        fs.copyFileSync(finalPath, queuedPdfPath);
+        queuedJob.pdfPath = queuedPdfPath;
+        printQueue.updateJobStatus(queuedJob.id, "pending");
+
+        fs.unlink(
+          finalPath,
+          (err) => err && console.error(`Failed delete: ${finalPath}`),
+        );
+
+        res.json({
+          status: "queued",
+          message: `Agent offline, job added to queue (position: ${printQueue.queue.length})`,
+          mode: "queued",
+          queueId: queuedJob.id,
+        });
+      }
     } else {
       // Mode PDF ONLY
       res.setHeader("Content-Type", "application/pdf");
