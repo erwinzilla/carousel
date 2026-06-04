@@ -256,11 +256,11 @@ app.post("/print-loan", async (req, res) => {
 
         // Simpan ke queue
         const queuedJob = printQueue.addJob({
-          jobId: jobId,
+          jobId: loanId,
           agentId: agentId,
           pdfBase64: pdfBase64,
-          fileName: `job-${jobId}.pdf`,
-          originalJobId: jobId,
+          fileName: `job-${loanId}.pdf`,
+          originalJobId: loanId,
           timestamp: Date.now(),
         });
 
