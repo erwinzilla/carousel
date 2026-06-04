@@ -30,13 +30,11 @@ const pendingJobs = new Map();
 // Endpoint lama: /print-job (dimodifikasi agar bisa print via agent)
 app.post("/print-job", async (req, res) => {
   try {
-    const { token, jobId, agentId = "pc-admin-001" } = req.body;
+    const { token, jobId, agentId = "pc-admin-001", print = true } = req.body; // ← Tambahkan parameter print (default true)
 
-    // CEK APAKAH AGENT ONLINE
-    const agentSocket = agents.get(agentId);
-    if (!agentSocket) {
-      return res.status(404).json({ error: "Printer agent not connected" });
-    }
+    console.log(
+      `📨 Received print-job request: ${jobId}, print mode: ${print ? "PRINT" : "ONLY PDF"}`,
+    );
 
     const tempDir = path.join(__dirname, "temp");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -61,40 +59,82 @@ app.post("/print-job", async (req, res) => {
       return res.status(500).json({ error: "PDF_NOT_FOUND" });
     }
 
-    // ============ KIRIM KE AGENT UNTUK DI PRINT ============
-    const pdfBuffer = fs.readFileSync(finalPath);
-    const pdfBase64 = pdfBuffer.toString("base64");
+    // ============ CEK MODE PRINT ============
+    if (print === true || print === "true") {
+      // Mode PRINT: kirim ke agent dan tunggu hasil print
 
-    const printJobId = `${jobId}-${Date.now()}`;
+      // Cek apakah agent online
+      const agentSocket = agents.get(agentId);
+      if (!agentSocket) {
+        return res.status(404).json({ error: "Printer agent not connected" });
+      }
 
-    // Kirim perintah ke agent
-    agentSocket.emit("print-command", {
-      jobId: printJobId,
-      pdfBase64: pdfBase64,
-      fileName: `job-${jobId}.pdf`,
-    });
+      // Baca PDF dan konversi ke base64
+      const pdfBuffer = fs.readFileSync(finalPath);
+      const pdfBase64 = pdfBuffer.toString("base64");
 
-    // Simpan promise untuk response
-    const printPromise = new Promise((resolve, reject) => {
-      pendingJobs.set(printJobId, { resolve, reject });
+      const printJobId = `${jobId}-${Date.now()}`;
 
-      // Timeout 30 detik
-      setTimeout(() => {
-        if (pendingJobs.has(printJobId)) {
-          pendingJobs.delete(printJobId);
-          reject(new Error("Print timeout"));
+      // Kirim perintah ke agent
+      agentSocket.emit("print-command", {
+        jobId: printJobId,
+        pdfBase64: pdfBase64,
+        fileName: `job-${jobId}.pdf`,
+      });
+
+      // Tunggu hasil print
+      const printPromise = new Promise((resolve, reject) => {
+        pendingJobs.set(printJobId, { resolve, reject });
+
+        // Timeout 30 detik
+        setTimeout(() => {
+          if (pendingJobs.has(printJobId)) {
+            pendingJobs.delete(printJobId);
+            reject(new Error("Print timeout"));
+          }
+        }, 30000);
+      });
+
+      await printPromise;
+
+      // Bersihkan file temporary
+      [job1Path, job2Path, finalPath].forEach((file) => {
+        fs.unlink(
+          file,
+          (err) => err && console.error(`Failed delete: ${file}`),
+        );
+      });
+
+      res.json({
+        status: "success",
+        message: "Print job sent to printer",
+        mode: "print",
+        jobId: jobId,
+      });
+    } else {
+      // Mode PDF ONLY: hanya mengembalikan file PDF (tidak print)
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename=job-final-${unique}.pdf`,
+      );
+      res.sendFile(finalPath, (err) => {
+        if (err) {
+          console.error("SendFile error:", err);
         }
-      }, 30000);
-    });
 
-    await printPromise;
-
-    // Bersihkan file temporary
-    [job1Path, job2Path, finalPath].forEach((file) => {
-      fs.unlink(file, (err) => err && console.error(`Failed delete: ${file}`));
-    });
-
-    res.json({ status: "success", message: "Print job sent to printer" });
+        // Hapus file setelah dikirim (opsional, bisa juga disimpan)
+        setTimeout(() => {
+          [job1Path, job2Path, finalPath].forEach((file) => {
+            fs.unlink(
+              file,
+              (err) => err && console.error(`Failed delete: ${file}`),
+            );
+          });
+        }, 5000); // Tunggu 5 detik sebelum hapus
+      });
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || "ERROR_GENERATE_PDF" });
@@ -104,12 +144,11 @@ app.post("/print-job", async (req, res) => {
 // Endpoint lama: /print-loan (dimodifikasi)
 app.post("/print-loan", async (req, res) => {
   try {
-    const { token, loanId, agentId = "pc-admin-001" } = req.body;
+    const { token, loanId, agentId = "pc-admin-001", print = true } = req.body; // ← Tambahkan parameter print
 
-    const agentSocket = agents.get(agentId);
-    if (!agentSocket) {
-      return res.status(404).json({ error: "Printer agent not connected" });
-    }
+    console.log(
+      `📨 Received loan request: ${loanId}, print mode: ${print ? "PRINT" : "ONLY PDF"}`,
+    );
 
     const tempDir = path.join(__dirname, "temp");
     if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
@@ -125,37 +164,67 @@ app.post("/print-loan", async (req, res) => {
       return res.status(500).json({ error: "PDF_NOT_FOUND" });
     }
 
-    // Kirim ke agent untuk print
-    const pdfBuffer = fs.readFileSync(finalPath);
-    const pdfBase64 = pdfBuffer.toString("base64");
+    // ============ CEK MODE PRINT ============
+    if (print === true || print === "true") {
+      // Mode PRINT
+      const agentSocket = agents.get(agentId);
+      if (!agentSocket) {
+        return res.status(404).json({ error: "Printer agent not connected" });
+      }
 
-    const printJobId = `loan-${loanId}-${Date.now()}`;
+      const pdfBuffer = fs.readFileSync(finalPath);
+      const pdfBase64 = pdfBuffer.toString("base64");
 
-    agentSocket.emit("print-command", {
-      jobId: printJobId,
-      pdfBase64: pdfBase64,
-      fileName: `loan-${loanId}.pdf`,
-    });
+      const printJobId = `loan-${loanId}-${Date.now()}`;
 
-    const printPromise = new Promise((resolve, reject) => {
-      pendingJobs.set(printJobId, { resolve, reject });
+      agentSocket.emit("print-command", {
+        jobId: printJobId,
+        pdfBase64: pdfBase64,
+        fileName: `loan-${loanId}.pdf`,
+      });
 
-      setTimeout(() => {
-        if (pendingJobs.has(printJobId)) {
-          pendingJobs.delete(printJobId);
-          reject(new Error("Print timeout"));
-        }
-      }, 30000);
-    });
+      const printPromise = new Promise((resolve, reject) => {
+        pendingJobs.set(printJobId, { resolve, reject });
 
-    await printPromise;
+        setTimeout(() => {
+          if (pendingJobs.has(printJobId)) {
+            pendingJobs.delete(printJobId);
+            reject(new Error("Print timeout"));
+          }
+        }, 30000);
+      });
 
-    fs.unlink(
-      finalPath,
-      (err) => err && console.error(`Failed delete: ${finalPath}`),
-    );
+      await printPromise;
 
-    res.json({ status: "success", message: "Loan printed successfully" });
+      fs.unlink(
+        finalPath,
+        (err) => err && console.error(`Failed delete: ${finalPath}`),
+      );
+
+      res.json({
+        status: "success",
+        message: "Loan printed successfully",
+        mode: "print",
+        loanId: loanId,
+      });
+    } else {
+      // Mode PDF ONLY
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename=loan-${unique}.pdf`,
+      );
+      res.sendFile(finalPath, (err) => {
+        if (err) console.error("SendFile error:", err);
+
+        setTimeout(() => {
+          fs.unlink(
+            finalPath,
+            (err) => err && console.error(`Failed delete: ${finalPath}`),
+          );
+        }, 5000);
+      });
+    }
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: err.message || "ERROR_GENERATE_PDF" });
