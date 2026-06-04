@@ -445,7 +445,7 @@ app.get("/queue/status", (req, res) => {
 });
 
 // ============ ENDPOINT UNTUK CANCEL QUEUE ============
-app.delete("/queue/cancel/:jobId", (req, res) => {
+app.post("/queue/cancel", (req, res) => {
   const { jobId } = req.params;
   const job = printQueue.queue.find((j) => j.id === jobId);
 
