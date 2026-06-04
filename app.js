@@ -8,6 +8,7 @@ const socketIo = require("socket.io");
 const { downloadFile } = require("./services/download");
 const { generatePdf } = require("./services/generatePdf");
 const { mergePdf } = require("./services/mergePdf");
+const { PrintQueue } = require("./services/queue-manager");
 // const { printFile } = require("./services/print"); // Biarkan comment dulu
 
 const app = express();
@@ -21,19 +22,25 @@ const io = socketIo(server, {
 
 app.use(express.json({ limit: "50mb" }));
 
-// ============ STORE UNTUK AGENT ============
+// ============ STORE UNTUK AGENT & QUEUE ============
 const agents = new Map(); // key: agentId, value: socket object
 const pendingJobs = new Map();
+const printQueue = new PrintQueue();
 
 // ============ ENDPOINT YANG SUDAH ADA (DIMODIFIKASI) ============
 
 // Endpoint lama: /print-job (dimodifikasi agar bisa print via agent)
 app.post("/print-job", async (req, res) => {
   try {
-    const { token, jobId, agentId = "pc-admin-001", print = true } = req.body; // ← Tambahkan parameter print (default true)
+    const {
+      token,
+      jobId,
+      agentId = "pc-admin-001",
+      directPrint = true,
+    } = req.body; // ← Tambahkan parameter print (default true)
 
     console.log(
-      `📨 Received print-job request: ${jobId}, print mode: ${print ? "PRINT" : "ONLY PDF"}`,
+      `📨 Received print-job request: ${jobId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
     );
 
     const tempDir = path.join(__dirname, "temp");
@@ -60,60 +67,91 @@ app.post("/print-job", async (req, res) => {
     }
 
     // ============ CEK MODE PRINT ============
-    if (print === true || print === "true") {
+    if (directPrint === true || directPrint === "true") {
       // Mode PRINT: kirim ke agent dan tunggu hasil print
-
-      // Cek apakah agent online
       const agentSocket = agents.get(agentId);
-      if (!agentSocket) {
-        return res.status(404).json({ error: "Printer agent not connected" });
-      }
 
       // Baca PDF dan konversi ke base64
       const pdfBuffer = fs.readFileSync(finalPath);
       const pdfBase64 = pdfBuffer.toString("base64");
 
-      const printJobId = `${jobId}-${Date.now()}`;
+      if (agentSocket) {
+        // === CASE 1: AGENT ONLINE → LANGSUNG PRINT ===
+        console.log(`✅ Agent ${agentId} online, printing immediately...`);
 
-      // Kirim perintah ke agent
-      agentSocket.emit("print-command", {
-        jobId: printJobId,
-        pdfBase64: pdfBase64,
-        fileName: `job-${jobId}.pdf`,
-      });
+        const printJobId = `${jobId}-${Date.now()}`;
 
-      // Tunggu hasil print
-      const printPromise = new Promise((resolve, reject) => {
-        pendingJobs.set(printJobId, { resolve, reject });
+        agentSocket.emit("print-command", {
+          jobId: printJobId,
+          pdfBase64: pdfBase64,
+          fileName: `job-${jobId}.pdf`,
+        });
 
-        // Timeout 30 detik
-        setTimeout(() => {
-          if (pendingJobs.has(printJobId)) {
-            pendingJobs.delete(printJobId);
-            reject(new Error("Print timeout"));
-          }
-        }, 30000);
-      });
+        const printPromise = new Promise((resolve, reject) => {
+          pendingJobs.set(printJobId, { resolve, reject });
+          setTimeout(() => {
+            if (pendingJobs.has(printJobId)) {
+              pendingJobs.delete(printJobId);
+              reject(new Error("Print timeout"));
+            }
+          }, 30000);
+        });
 
-      await printPromise;
+        await printPromise;
 
-      // Bersihkan file temporary
-      [job1Path, job2Path, finalPath].forEach((file) => {
-        fs.unlink(
-          file,
-          (err) => err && console.error(`Failed delete: ${file}`),
+        // Cleanup file
+        [job1Path, job2Path, finalPath].forEach((file) => {
+          fs.unlink(
+            file,
+            (err) => err && console.error(`Failed delete: ${file}`),
+          );
+        });
+
+        res.json({
+          status: "success",
+          message: "Printed immediately",
+          mode: "direct",
+        });
+      } else {
+        // === CASE 2: AGENT OFFLINE → MASUKKAN KE QUEUE ===
+        console.log(`⚠️ Agent ${agentId} offline, adding to queue...`);
+
+        // Simpan ke queue
+        const queuedJob = printQueue.addJob({
+          jobId: jobId,
+          agentId: agentId,
+          pdfBase64: pdfBase64,
+          fileName: `job-${jobId}.pdf`,
+          originalJobId: jobId,
+          timestamp: Date.now(),
+        });
+
+        // Simpan PDF sementara (optional, kalau queue besar bisa simpan di disk)
+        const queuedPdfPath = path.join(
+          __dirname,
+          `queued_${queuedJob.id}.pdf`,
         );
-      });
+        fs.copyFileSync(finalPath, queuedPdfPath);
+        queuedJob.pdfPath = queuedPdfPath;
+        printQueue.updateJobStatus(queuedJob.id, "pending");
 
-      res.json({
-        status: "success",
-        message: "Print job sent to printer",
-        mode: "print",
-        jobId: jobId,
-      });
+        // Cleanup temp files
+        [job1Path, job2Path, finalPath].forEach((file) => {
+          fs.unlink(
+            file,
+            (err) => err && console.error(`Failed delete: ${file}`),
+          );
+        });
+
+        res.json({
+          status: "queued",
+          message: `Agent offline, job added to queue (position: ${printQueue.queue.length})`,
+          mode: "queued",
+          queueId: queuedJob.id,
+        });
+      }
     } else {
       // Mode PDF ONLY: hanya mengembalikan file PDF (tidak print)
-
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
@@ -144,10 +182,15 @@ app.post("/print-job", async (req, res) => {
 // Endpoint lama: /print-loan (dimodifikasi)
 app.post("/print-loan", async (req, res) => {
   try {
-    const { token, loanId, agentId = "pc-admin-001", print = true } = req.body; // ← Tambahkan parameter print
+    const {
+      token,
+      loanId,
+      agentId = "pc-admin-001",
+      directPrint = true,
+    } = req.body; // ← Tambahkan parameter print
 
     console.log(
-      `📨 Received loan request: ${loanId}, print mode: ${print ? "PRINT" : "ONLY PDF"}`,
+      `📨 Received loan request: ${loanId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
     );
 
     const tempDir = path.join(__dirname, "temp");
@@ -165,7 +208,7 @@ app.post("/print-loan", async (req, res) => {
     }
 
     // ============ CEK MODE PRINT ============
-    if (print === true || print === "true") {
+    if (directPrint === true || directPrint === "true") {
       // Mode PRINT
       const agentSocket = agents.get(agentId);
       if (!agentSocket) {
@@ -296,6 +339,10 @@ io.on("connection", (socket) => {
 
     console.log(`✅ Agent registered: ${agentId} (Printer: ${printerName})`);
     socket.emit("registered", { status: "ok", agentId });
+
+    // ============ PROSES QUEUE UNTUK AGENT INI ============
+    console.log(`📋 Checking queue for agent: ${agentId}`);
+    printQueue.processQueueForAgent(agentId, socket, pendingJobs);
   });
 
   // Agent report print success
@@ -340,6 +387,51 @@ app.get("/health", (req, res) => {
     pendingJobs: pendingJobs.size,
     uptime: process.uptime(),
   });
+});
+
+// ============ ENDPOINT UNTUK CEK QUEUE STATUS ============
+app.get("/queue/status", (req, res) => {
+  res.json({
+    totalQueued: printQueue.queue.length,
+    pendingJobs: printQueue.queue.filter((j) => j.status === "pending").length,
+    processingJobs: printQueue.queue.filter((j) => j.status === "processing")
+      .length,
+    completedJobs: printQueue.queue.filter((j) => j.status === "completed")
+      .length,
+    failedJobs: printQueue.queue.filter((j) => j.status === "failed").length,
+    queue: printQueue.queue.map((j) => ({
+      id: j.id,
+      status: j.status,
+      createdAt: j.createdAt,
+      agentId: j.agentId,
+      fileName: j.fileName,
+    })),
+  });
+});
+
+// ============ ENDPOINT UNTUK CANCEL QUEUE ============
+app.delete("/queue/cancel/:jobId", (req, res) => {
+  const { jobId } = req.params;
+  const job = printQueue.queue.find((j) => j.id === jobId);
+
+  if (!job) {
+    return res.status(404).json({ error: "Job not found" });
+  }
+
+  if (job.status !== "pending") {
+    return res
+      .status(400)
+      .json({ error: `Cannot cancel job with status: ${job.status}` });
+  }
+
+  printQueue.removeJob(jobId);
+
+  // Hapus file PDF jika ada
+  if (job.pdfPath && fs.existsSync(job.pdfPath)) {
+    fs.unlinkSync(job.pdfPath);
+  }
+
+  res.json({ success: true, message: `Job ${jobId} cancelled` });
 });
 
 // ============ START SERVER ============
