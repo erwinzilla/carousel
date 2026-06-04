@@ -1,88 +1,123 @@
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const http = require("http");
+const socketIo = require("socket.io");
 
+// Services yang sudah ada
 const { downloadFile } = require("./services/download");
 const { generatePdf } = require("./services/generatePdf");
 const { mergePdf } = require("./services/mergePdf");
-// const { printFile } = require("./services/print");
+// const { printFile } = require("./services/print"); // Biarkan comment dulu
 
 const app = express();
-app.use(express.json());
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
+});
 
+app.use(express.json({ limit: "50mb" }));
+
+// ============ STORE UNTUK AGENT ============
+const agents = new Map(); // key: agentId, value: socket object
+const pendingJobs = new Map();
+
+// ============ ENDPOINT YANG SUDAH ADA (DIMODIFIKASI) ============
+
+// Endpoint lama: /print-job (dimodifikasi agar bisa print via agent)
 app.post("/print-job", async (req, res) => {
   try {
-    const { token, jobId } = req.body;
+    const { token, jobId, agentId = "pc-admin-001" } = req.body;
+
+    // CEK APAKAH AGENT ONLINE
+    const agentSocket = agents.get(agentId);
+    if (!agentSocket) {
+      return res.status(404).json({ error: "Printer agent not connected" });
+    }
 
     const tempDir = path.join(__dirname, "temp");
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
     const unique = `${jobId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const job1Path = path.join(tempDir, `job-${unique}-1.pdf`);
     const job2Path = path.join(tempDir, `job-${unique}-2.pdf`);
     const finalPath = path.join(tempDir, `job-final-${unique}.pdf`);
 
-    // 🔥 1. Download Cakrawala (via Laravel proxy)
+    // 1. Download Cakrawala (via Laravel proxy)
     const job1Url = `https://erwinzilla.com/api/cakrawala/invoices/${jobId}/nota-invoice`;
-
     await downloadFile(job1Url, job1Path, token);
 
-    // 🔥 2. Generate Tornado PDF
+    // 2. Generate Tornado PDF
     const job2Url = `https://pts.erwinzilla.com/work-order/${jobId}/print?token=${token}`;
-
     await generatePdf(job2Url, job2Path);
 
-    // 🔥 3. Merge
+    // 3. Merge
     await mergePdf(job1Path, job2Path, finalPath);
-
-    // 🔥 4. Print
-    // await printFile(finalPath);
 
     if (!fs.existsSync(finalPath)) {
       return res.status(500).json({ error: "PDF_NOT_FOUND" });
     }
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename=job-final-${unique}.pdf`,
-    );
-    res.sendFile(finalPath, (err) => {
-      if (err) {
-        console.error("SendFile error:", err);
-      }
+    // ============ KIRIM KE AGENT UNTUK DI PRINT ============
+    const pdfBuffer = fs.readFileSync(finalPath);
+    const pdfBase64 = pdfBuffer.toString("base64");
 
-      fs.unlink(job1Path, (err) => {
-        if (err) console.error("Failed delete job1:", err);
-      });
-      fs.unlink(job2Path, (err) => {
-        if (err) console.error("Failed delete job2:", err);
-      });
-      fs.unlink(finalPath, (err) => {
-        if (err) console.error("Failed delete job-final:", err);
-      });
+    const printJobId = `${jobId}-${Date.now()}`;
+
+    // Kirim perintah ke agent
+    agentSocket.emit("print-command", {
+      jobId: printJobId,
+      pdfBase64: pdfBase64,
+      fileName: `job-${jobId}.pdf`,
     });
 
-    // res.json({ status: "printed" });
-    // res.json({
-    //   status: "success",
-    //   file: finalPath,
-    // });
+    // Simpan promise untuk response
+    const printPromise = new Promise((resolve, reject) => {
+      pendingJobs.set(printJobId, { resolve, reject });
+
+      // Timeout 30 detik
+      setTimeout(() => {
+        if (pendingJobs.has(printJobId)) {
+          pendingJobs.delete(printJobId);
+          reject(new Error("Print timeout"));
+        }
+      }, 30000);
+    });
+
+    await printPromise;
+
+    // Bersihkan file temporary
+    [job1Path, job2Path, finalPath].forEach((file) => {
+      fs.unlink(file, (err) => err && console.error(`Failed delete: ${file}`));
+    });
+
+    res.json({ status: "success", message: "Print job sent to printer" });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "ERROR_GENERATE_PDF" });
+    res.status(500).json({ error: err.message || "ERROR_GENERATE_PDF" });
   }
 });
 
+// Endpoint lama: /print-loan (dimodifikasi)
 app.post("/print-loan", async (req, res) => {
   try {
-    const { token, loanId } = req.body;
+    const { token, loanId, agentId = "pc-admin-001" } = req.body;
+
+    const agentSocket = agents.get(agentId);
+    if (!agentSocket) {
+      return res.status(404).json({ error: "Printer agent not connected" });
+    }
 
     const tempDir = path.join(__dirname, "temp");
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
 
     const unique = `${loanId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const finalPath = path.join(tempDir, `loan-${unique}.pdf`);
 
-    // 🔥 2. Generate Tornado PDF
+    // Generate Tornado PDF
     const loanUrl = `https://pts.erwinzilla.com/loan/${loanId}/print?token=${token}`;
     await generatePdf(loanUrl, finalPath, { width: "210mm", height: "633px" });
 
@@ -90,25 +125,169 @@ app.post("/print-loan", async (req, res) => {
       return res.status(500).json({ error: "PDF_NOT_FOUND" });
     }
 
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `inline; filename=loan-${unique}.pdf`);
-    res.sendFile(finalPath, (err) => {
-      if (err) {
-        console.error("SendFile error:", err);
-      }
+    // Kirim ke agent untuk print
+    const pdfBuffer = fs.readFileSync(finalPath);
+    const pdfBase64 = pdfBuffer.toString("base64");
 
-      fs.unlink(finalPath, (err) => {
-        if (err) console.error("Failed delete loan:", err);
-      });
+    const printJobId = `loan-${loanId}-${Date.now()}`;
+
+    agentSocket.emit("print-command", {
+      jobId: printJobId,
+      pdfBase64: pdfBase64,
+      fileName: `loan-${loanId}.pdf`,
     });
+
+    const printPromise = new Promise((resolve, reject) => {
+      pendingJobs.set(printJobId, { resolve, reject });
+
+      setTimeout(() => {
+        if (pendingJobs.has(printJobId)) {
+          pendingJobs.delete(printJobId);
+          reject(new Error("Print timeout"));
+        }
+      }, 30000);
+    });
+
+    await printPromise;
+
+    fs.unlink(
+      finalPath,
+      (err) => err && console.error(`Failed delete: ${finalPath}`),
+    );
+
+    res.json({ status: "success", message: "Loan printed successfully" });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "ERROR_GENERATE_PDF" });
+    res.status(500).json({ error: err.message || "ERROR_GENERATE_PDF" });
   }
 });
 
-app.listen(3000, () => {
-  console.log("Print Service running on port 3000");
+// ============ ENDPOINT BARU UNTUK PRINT DARI ANDROID LANGSUNG ============
+app.post("/api/print-pdf", async (req, res) => {
+  try {
+    const { pdfBase64, fileName, agentId = "pc-admin-001", token } = req.body;
+
+    // Validasi token sederhana (opsional)
+    const VALID_TOKEN = process.env.API_TOKEN || "rahasia123";
+    if (token !== VALID_TOKEN) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    const agentSocket = agents.get(agentId);
+    if (!agentSocket) {
+      return res.status(404).json({ error: "Printer agent not connected" });
+    }
+
+    const jobId = `android-${Date.now()}`;
+
+    agentSocket.emit("print-command", {
+      jobId: jobId,
+      pdfBase64: pdfBase64,
+      fileName: fileName || "document.pdf",
+    });
+
+    const printPromise = new Promise((resolve, reject) => {
+      pendingJobs.set(jobId, { resolve, reject });
+      setTimeout(() => {
+        if (pendingJobs.has(jobId)) {
+          pendingJobs.delete(jobId);
+          reject(new Error("Print timeout"));
+        }
+      }, 30000);
+    });
+
+    await printPromise;
+    res.json({ success: true, message: "Print job sent" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
-// app.use("/files", express.static("temp"));
+// ============ SOCKET.IO UNTUK AGENT (PC ADMIN) ============
+io.on("connection", (socket) => {
+  console.log("Client connected:", socket.id);
+
+  // Agent register (dari PC Admin)
+  socket.on("agent-register", (data) => {
+    const { agentId, printerName, password } = data;
+
+    // Validasi password (opsional)
+    const AGENT_PASSWORD = process.env.AGENT_PASSWORD || "agentPassword789";
+    if (password !== AGENT_PASSWORD) {
+      socket.emit("error", "Invalid agent password");
+      socket.disconnect();
+      return;
+    }
+
+    // Simpan agent
+    agents.set(agentId, socket);
+    socket.agentId = agentId;
+    socket.printerName = printerName;
+
+    console.log(`✅ Agent registered: ${agentId} (Printer: ${printerName})`);
+    socket.emit("registered", { status: "ok", agentId });
+  });
+
+  // Agent report print success
+  socket.on("print-success", (data) => {
+    const { jobId } = data;
+    console.log(`✅ Print success for job ${jobId}`);
+
+    if (pendingJobs.has(jobId)) {
+      const { resolve } = pendingJobs.get(jobId);
+      resolve();
+      pendingJobs.delete(jobId);
+    }
+  });
+
+  // Agent report print failed - FIXED: pake => bukan (
+  socket.on("print-failed", (data) => {
+    const { jobId, error } = data;
+    console.log(`❌ Print failed for job ${jobId}: ${error}`);
+
+    if (pendingJobs.has(jobId)) {
+      const { reject } = pendingJobs.get(jobId);
+      reject(new Error(error));
+      pendingJobs.delete(jobId);
+    }
+  });
+
+  // Agent disconnect
+  socket.on("disconnect", () => {
+    if (socket.agentId) {
+      console.log(`⚠️ Agent disconnected: ${socket.agentId}`);
+      agents.delete(socket.agentId);
+    }
+  });
+});
+
+// ============ HEALTH CHECK ============
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    agents: Array.from(agents.keys()),
+    agentsCount: agents.size,
+    pendingJobs: pendingJobs.size,
+    uptime: process.uptime(),
+  });
+});
+
+// ============ START SERVER ============
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`
+╔════════════════════════════════════════════════════╗
+║     PRINT SERVICE WITH PRINTER AGENT READY        ║
+╠════════════════════════════════════════════════════╣
+║  🖨️  HTTP Server: http://localhost:${PORT}          ║
+║  📡 Socket.IO:  ws://localhost:${PORT}              ║
+║  📊 Health:     http://localhost:${PORT}/health     ║
+╠════════════════════════════════════════════════════╣
+║  Endpoints:                                        ║
+║  POST /print-job     (existing, with print)       ║
+║  POST /print-loan    (existing, with print)       ║
+║  POST /api/print-pdf (new, for Android)           ║
+╚════════════════════════════════════════════════════╝
+    `);
+});
