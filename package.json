@@ -20,10 +20,13 @@
   "homepage": "https://github.com/erwinzilla/carousel#readme",
   "dependencies": {
     "axios": "^1.16.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "pdf-lib": "^1.17.1",
     "pdf-to-printer": "^5.8.0",
-    "puppeteer": "^24.42.0"
+    "puppeteer": "^24.42.0",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
     "prettier": "3.8.3"
