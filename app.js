@@ -179,6 +179,140 @@ app.post("/print-job", async (req, res) => {
   }
 });
 
+app.post("/print-invoice", async (req, res) => {
+  try {
+    const {
+      token,
+      invoiceId,
+      agentId = "pc-admin-001",
+      directPrint = true,
+    } = req.body; // ← Tambahkan parameter print (default true)
+
+    console.log(
+      `📨 Received print-invoice request: ${invoiceId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
+    );
+
+    const tempDir = path.join(__dirname, "temp");
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+    const unique = `${invoiceId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const finalPath = path.join(tempDir, `invoice-${unique}.pdf`);
+
+    // Download Cakrawala (via Laravel proxy)
+    const invoiceUrl = `https://erwinzilla.com/api/cakrawala/invoices/${invoiceId}/pdf`;
+    await downloadFile(invoiceUrl, finalPath, token);
+
+    if (!fs.existsSync(finalPath)) {
+      return res.status(500).json({ error: "PDF_NOT_FOUND" });
+    }
+
+    // ============ CEK MODE PRINT ============
+    if (directPrint === true || directPrint === "true") {
+      // Mode PRINT: kirim ke agent dan tunggu hasil print
+      const agentSocket = agents.get(agentId);
+
+      // Baca PDF dan konversi ke base64
+      const pdfBuffer = fs.readFileSync(finalPath);
+      const pdfBase64 = pdfBuffer.toString("base64");
+
+      if (agentSocket) {
+        // === CASE 1: AGENT ONLINE → LANGSUNG PRINT ===
+        console.log(`✅ Agent ${agentId} online, printing immediately...`);
+
+        const printInvoiceId = `${invoiceId}-${Date.now()}`;
+
+        agentSocket.emit("print-command", {
+          jobId: printInvoiceId,
+          pdfBase64: pdfBase64,
+          fileName: `invoice-${invoiceId}.pdf`,
+        });
+
+        const printPromise = new Promise((resolve, reject) => {
+          pendingJobs.set(printInvoiceId, { resolve, reject });
+          setTimeout(() => {
+            if (pendingJobs.has(printInvoiceId)) {
+              pendingJobs.delete(printInvoiceId);
+              reject(new Error("Print timeout"));
+            }
+          }, 30000);
+        });
+
+        await printPromise;
+
+        // Cleanup file
+        fs.unlink(
+          finalPath,
+          (err) => err && console.error(`Failed delete: ${finalPath}`),
+        );
+
+        res.json({
+          status: "success",
+          message: "Printed immediately",
+          mode: "direct",
+        });
+      } else {
+        // === CASE 2: AGENT OFFLINE → MASUKKAN KE QUEUE ===
+        console.log(`⚠️ Agent ${agentId} offline, adding to queue...`);
+
+        // Simpan ke queue
+        const queuedJob = printQueue.addJob({
+          jobId: invoiceId,
+          agentId: agentId,
+          pdfBase64: pdfBase64,
+          fileName: `job-${invoiceId}.pdf`,
+          originalJobId: invoiceId,
+          timestamp: Date.now(),
+        });
+
+        // Simpan PDF sementara (optional, kalau queue besar bisa simpan di disk)
+        const queuedPdfPath = path.join(
+          __dirname,
+          `queued_${queuedJob.id}.pdf`,
+        );
+        fs.copyFileSync(finalPath, queuedPdfPath);
+        queuedJob.pdfPath = queuedPdfPath;
+        printQueue.updateJobStatus(queuedJob.id, "pending");
+
+        // Cleanup temp files
+        fs.unlink(
+          finalPath,
+          (err) => err && console.error(`Failed delete: ${finalPath}`),
+        );
+
+        res.json({
+          status: "queued",
+          message: `Agent offline, job added to queue (position: ${printQueue.queue.length})`,
+          mode: "queued",
+          queueId: queuedJob.id,
+        });
+      }
+    } else {
+      // Mode PDF ONLY: hanya mengembalikan file PDF (tidak print)
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename=invoice-${unique}.pdf`,
+      );
+      res.sendFile(finalPath, (err) => {
+        if (err) {
+          console.error("SendFile error:", err);
+        }
+
+        // Hapus file setelah dikirim (opsional, bisa juga disimpan)
+        setTimeout(() => {
+          fs.unlink(
+            finalPath,
+            (err) => err && console.error(`Failed delete: ${finalPath}`),
+          );
+        }, 5000); // Tunggu 5 detik sebelum hapus
+      });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "ERROR_GENERATE_PDF" });
+  }
+});
+
 // Endpoint lama: /print-loan (dimodifikasi)
 app.post("/print-loan", async (req, res) => {
   try {
@@ -474,16 +608,17 @@ const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`
 ╔════════════════════════════════════════════════════╗
-║     PRINT SERVICE WITH PRINTER AGENT READY        ║
+║     PRINT SERVICE WITH PRINTER AGENT READY         ║
 ╠════════════════════════════════════════════════════╣
-║  🖨️  HTTP Server: http://localhost:${PORT}          ║
-║  📡 Socket.IO:  ws://localhost:${PORT}              ║
-║  📊 Health:     http://localhost:${PORT}/health     ║
+║  🖨️  HTTP Server: http://localhost:${PORT}         ║
+║  📡 Socket.IO:  ws://localhost:${PORT}             ║
+║  📊 Health:     http://localhost:${PORT}/health    ║
 ╠════════════════════════════════════════════════════╣
 ║  Endpoints:                                        ║
-║  POST /print-job     (existing, with print)       ║
-║  POST /print-loan    (existing, with print)       ║
-║  POST /api/print-pdf (new, for Android)           ║
+║  POST /print-job     (existing, with print)        ║
+║  POST /print-invoice (existing, with print)        ║
+║  POST /print-loan    (existing, with print)        ║
+║  POST /api/print-pdf (new, for Android)            ║
 ╚════════════════════════════════════════════════════╝
     `);
 });
