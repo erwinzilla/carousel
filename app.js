@@ -37,10 +37,11 @@ app.post("/print-job", async (req, res) => {
       jobId,
       agentId = "pc-admin-001",
       directPrint = true,
+      name,
     } = req.body; // ← Tambahkan parameter print (default true)
 
     console.log(
-      `📨 Received print-job request: ${jobId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
+      `📨 Received print-job request: ${name}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
     );
 
     const tempDir = path.join(__dirname, "temp");
@@ -84,7 +85,7 @@ app.post("/print-job", async (req, res) => {
         agentSocket.emit("print-command", {
           jobId: printJobId,
           pdfBase64: pdfBase64,
-          fileName: `job-${jobId}.pdf`,
+          fileName: `${name}-${jobId}.pdf`,
         });
 
         const printPromise = new Promise((resolve, reject) => {
@@ -121,7 +122,7 @@ app.post("/print-job", async (req, res) => {
           jobId: jobId,
           agentId: agentId,
           pdfBase64: pdfBase64,
-          fileName: `job-${jobId}.pdf`,
+          fileName: `${name}-${jobId}.pdf`,
           originalJobId: jobId,
           timestamp: Date.now(),
         });
@@ -155,7 +156,7 @@ app.post("/print-job", async (req, res) => {
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
-        `inline; filename=job-final-${unique}.pdf`,
+        `inline; filename=${name}-${unique}.pdf`,
       );
       res.sendFile(finalPath, (err) => {
         if (err) {
@@ -186,10 +187,11 @@ app.post("/print-invoice", async (req, res) => {
       invoiceId,
       agentId = "pc-admin-001",
       directPrint = true,
+      name,
     } = req.body; // ← Tambahkan parameter print (default true)
 
     console.log(
-      `📨 Received print-invoice request: ${invoiceId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
+      `📨 Received print-invoice request: ${name}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
     );
 
     const tempDir = path.join(__dirname, "temp");
@@ -224,7 +226,7 @@ app.post("/print-invoice", async (req, res) => {
         agentSocket.emit("print-command", {
           jobId: printInvoiceId,
           pdfBase64: pdfBase64,
-          fileName: `invoice-${invoiceId}.pdf`,
+          fileName: `${name}-${invoiceId}.pdf`,
         });
 
         const printPromise = new Promise((resolve, reject) => {
@@ -259,7 +261,7 @@ app.post("/print-invoice", async (req, res) => {
           jobId: invoiceId,
           agentId: agentId,
           pdfBase64: pdfBase64,
-          fileName: `job-${invoiceId}.pdf`,
+          fileName: `${name}-${invoiceId}.pdf`,
           originalJobId: invoiceId,
           timestamp: Date.now(),
         });
@@ -291,7 +293,7 @@ app.post("/print-invoice", async (req, res) => {
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader(
         "Content-Disposition",
-        `inline; filename=invoice-${unique}.pdf`,
+        `inline; filename=${name}-${unique}.pdf`,
       );
       res.sendFile(finalPath, (err) => {
         if (err) {
@@ -393,7 +395,7 @@ app.post("/print-loan", async (req, res) => {
           jobId: loanId,
           agentId: agentId,
           pdfBase64: pdfBase64,
-          fileName: `job-${loanId}.pdf`,
+          fileName: `loan-${loanId}.pdf`,
           originalJobId: loanId,
           timestamp: Date.now(),
         });
@@ -446,42 +448,155 @@ app.post("/print-loan", async (req, res) => {
 // ============ ENDPOINT BARU UNTUK PRINT DARI ANDROID LANGSUNG ============
 app.post("/api/print-pdf", async (req, res) => {
   try {
-    const { pdfBase64, fileName, agentId = "pc-admin-001", token } = req.body;
+    const {
+      pdfBase64,
+      fileName,
+      agentId = "pc-admin-001",
+      token,
+      directPrint = true, // ← Tambahkan parameter ini
+    } = req.body;
 
     // Validasi token sederhana (opsional)
-    const VALID_TOKEN = process.env.API_TOKEN || "rahasia123";
+    const VALID_TOKEN = process.env.API_TOKEN || "3501-mantap";
     if (token !== VALID_TOKEN) {
       return res.status(401).json({ error: "Invalid token" });
     }
 
-    const agentSocket = agents.get(agentId);
-    if (!agentSocket) {
-      return res.status(404).json({ error: "Printer agent not connected" });
+    // Validasi input
+    if (!pdfBase64) {
+      return res.status(400).json({ error: "pdfBase64 is required" });
     }
 
-    const jobId = `android-${Date.now()}`;
+    // Validasi format base64 (sederhana)
+    if (!pdfBase64.match(/^[A-Za-z0-9+/=]+$/)) {
+      return res.status(400).json({ error: "Invalid base64 format" });
+    }
 
-    agentSocket.emit("print-command", {
-      jobId: jobId,
-      pdfBase64: pdfBase64,
-      fileName: fileName || "document.pdf",
-    });
+    console.log(
+      `📨 Received print-pdf request: ${fileName}, print mode: ${directPrint ? "PRINT" : "ONLY RETURN"}`,
+    );
 
-    const printPromise = new Promise((resolve, reject) => {
-      pendingJobs.set(jobId, { resolve, reject });
-      setTimeout(() => {
-        if (pendingJobs.has(jobId)) {
-          pendingJobs.delete(jobId);
-          reject(new Error("Print timeout"));
+    // Simpan PDF sementara (opsional, untuk keperluan queue)
+    let tempPdfPath = null;
+    if (directPrint === true || directPrint === "true") {
+      // Hanya simpan ke disk jika akan di-print (untuk queue)
+      const tempDir = path.join(__dirname, "temp");
+      if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+      const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      tempPdfPath = path.join(tempDir, `android-pdf-${unique}.pdf`);
+
+      // Konversi base64 ke buffer dan simpan
+      const pdfBuffer = Buffer.from(pdfBase64, "base64");
+      fs.writeFileSync(tempPdfPath, pdfBuffer);
+    }
+
+    // ============ CEK MODE PRINT ============
+    if (directPrint === true || directPrint === "true") {
+      // Mode PRINT: kirim ke agent atau queue
+      const agentSocket = agents.get(agentId);
+
+      if (agentSocket) {
+        // === CASE 1: AGENT ONLINE → LANGSUNG PRINT ===
+        console.log(`✅ Agent ${agentId} online, printing immediately...`);
+
+        const jobId = `android-${Date.now()}-${Math.random().toString(36).slice(4)}`;
+
+        agentSocket.emit("print-command", {
+          jobId: jobId,
+          pdfBase64: pdfBase64,
+          fileName: fileName || "document.pdf",
+        });
+
+        const printPromise = new Promise((resolve, reject) => {
+          pendingJobs.set(jobId, { resolve, reject });
+          setTimeout(() => {
+            if (pendingJobs.has(jobId)) {
+              pendingJobs.delete(jobId);
+              reject(new Error("Print timeout (30 seconds)"));
+            }
+          }, 30000);
+        });
+
+        await printPromise;
+
+        // Cleanup temp file jika ada
+        if (tempPdfPath && fs.existsSync(tempPdfPath)) {
+          fs.unlink(
+            tempPdfPath,
+            (err) => err && console.error(`Failed delete: ${tempPdfPath}`),
+          );
         }
-      }, 30000);
-    });
 
-    await printPromise;
-    res.json({ success: true, message: "Print job sent" });
+        res.json({
+          success: true,
+          message: "Print job sent successfully",
+          mode: "direct",
+          jobId: jobId,
+        });
+      } else {
+        // === CASE 2: AGENT OFFLINE → MASUKKAN KE QUEUE ===
+        console.log(`⚠️ Agent ${agentId} offline, adding to queue...`);
+
+        // Simpan ke queue
+        const queuedJob = printQueue.addJob({
+          jobId: `android-${Date.now()}`,
+          agentId: agentId,
+          pdfBase64: pdfBase64,
+          fileName: fileName || "document.pdf",
+          originalJobId: `android-${Date.now()}`,
+          timestamp: Date.now(),
+          type: "android-pdf", // Untuk tracking
+        });
+
+        // Simpan PDF ke disk untuk queue
+        if (tempPdfPath && fs.existsSync(tempPdfPath)) {
+          queuedJob.pdfPath = tempPdfPath;
+          printQueue.updateJobStatus(queuedJob.id, "pending");
+        } else {
+          // Fallback: simpan dari base64 lagi
+          const queuePdfPath = path.join(
+            __dirname,
+            `queued_${queuedJob.id}.pdf`,
+          );
+          const pdfBuffer = Buffer.from(pdfBase64, "base64");
+          fs.writeFileSync(queuePdfPath, pdfBuffer);
+          queuedJob.pdfPath = queuePdfPath;
+          printQueue.updateJobStatus(queuedJob.id, "pending");
+        }
+
+        res.json({
+          success: true,
+          status: "queued",
+          message: `Printer agent offline, job added to queue (position: ${printQueue.queue.filter((j) => j.status === "pending").length})`,
+          mode: "queued",
+          queueId: queuedJob.id,
+          agentId: agentId,
+        });
+      }
+    } else {
+      // === MODE PDF ONLY: KEMBALIKAN PDF (TIDAK PRINT) ===
+      console.log(`📄 PDF Only mode, returning PDF for: ${fileName}`);
+
+      // Konversi base64 ke buffer
+      const pdfBuffer = Buffer.from(pdfBase64, "base64");
+
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename=${fileName || "document.pdf"}`,
+      );
+      res.setHeader("Content-Length", pdfBuffer.length);
+      res.send(pdfBuffer);
+
+      // Tidak perlu cleanup karena tidak menyimpan file
+    }
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: err.message });
+    console.error("Error in /api/print-pdf:", err);
+    res.status(500).json({
+      error: err.message || "Internal server error",
+      success: false,
+    });
   }
 });
 
