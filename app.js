@@ -95,7 +95,7 @@ app.post("/print-job", async (req, res) => {
               pendingJobs.delete(printJobId);
               reject(new Error("Print timeout"));
             }
-          }, 30000);
+          }, 120000);
         });
 
         await printPromise;
@@ -236,7 +236,7 @@ app.post("/print-invoice", async (req, res) => {
               pendingJobs.delete(printInvoiceId);
               reject(new Error("Print timeout"));
             }
-          }, 30000);
+          }, 120000);
         });
 
         await printPromise;
@@ -371,7 +371,7 @@ app.post("/print-loan", async (req, res) => {
               pendingJobs.delete(printJobId);
               reject(new Error("Print timeout"));
             }
-          }, 30000);
+          }, 120000);
         });
 
         await printPromise;
@@ -513,9 +513,9 @@ app.post("/api/print-pdf", async (req, res) => {
           setTimeout(() => {
             if (pendingJobs.has(jobId)) {
               pendingJobs.delete(jobId);
-              reject(new Error("Print timeout (30 seconds)"));
+              reject(new Error("Print timeout (120 seconds)"));
             }
-          }, 30000);
+          }, 120000);
         });
 
         await printPromise;
