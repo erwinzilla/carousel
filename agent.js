@@ -18,7 +18,8 @@ socket.on("connect", () => {
   console.log("✅ Terhubung ke VPS server");
   socket.emit("agent-register", {
     agentId: AGENT_ID,
-    printerName: "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6" || "Default Printer",
+    printerName:
+      "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6" || "Default Printer",
     password: AGENT_PASSWORD,
   });
 });
@@ -52,21 +53,15 @@ socket.on("print-command", async (data) => {
       `🖨️ Printer terdeteksi: ${printers.map((p) => p.name).join(", ")}`,
     );
 
-    const defaultPrinter = printers.find((p) => p.isDefault);
-    if (defaultPrinter) {
-      console.log(`✅ Printer default: ${defaultPrinter.name}`);
-    } else {
-      console.log(`⚠️ TIDAK ADA PRINTER DEFAULT!`);
-      if (printers.length > 0) {
-        console.log(`📌 Akan menggunakan printer pertama: ${printers[0].name}`);
-      } else {
-        throw new Error("Tidak ada printer yang terinstall!");
-      }
-    }
+    console.log(
+      `✅ Printer: ${printerName ?? "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6"}`,
+    );
+    console.log(`📃 Paper: ${paperSize ?? "A4"}`);
 
     // Cetak
     await print.print(tempFile, {
-      printer: printerName ?? "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6",
+      printer:
+        printerName ?? "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6",
       paperSize: paperSize ?? "A4", // Ukuran kertas
       scale: "fit", // Sesuaikan halaman
       silent: true,

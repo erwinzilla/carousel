@@ -35,9 +35,11 @@ app.post("/print-job", async (req, res) => {
     const {
       token,
       jobId,
-      agentId = "pc-admin-001",
+      agentId = "pc-admin-002",
       directPrint = true,
       name,
+      printerName,
+      paperSize = "A4",
     } = req.body; // ← Tambahkan parameter print (default true)
 
     console.log(
@@ -125,6 +127,8 @@ app.post("/print-job", async (req, res) => {
           fileName: `${name}-${jobId}.pdf`,
           originalJobId: jobId,
           timestamp: Date.now(),
+          printerName: printerName,
+          paperSize: paperSize,
         });
 
         // Simpan PDF sementara (optional, kalau queue besar bisa simpan di disk)
@@ -185,9 +189,11 @@ app.post("/print-invoice", async (req, res) => {
     const {
       token,
       invoiceId,
-      agentId = "pc-admin-001",
+      agentId = "pc-admin-002",
       directPrint = true,
       name,
+      printerName,
+      paperSize = "A4",
     } = req.body; // ← Tambahkan parameter print (default true)
 
     console.log(
@@ -264,6 +270,8 @@ app.post("/print-invoice", async (req, res) => {
           fileName: `${name}-${invoiceId}.pdf`,
           originalJobId: invoiceId,
           timestamp: Date.now(),
+          printerName: printerName,
+          paperSize: paperSize,
         });
 
         // Simpan PDF sementara (optional, kalau queue besar bisa simpan di disk)
@@ -321,8 +329,10 @@ app.post("/print-loan", async (req, res) => {
     const {
       token,
       loanId,
-      agentId = "pc-admin-001",
+      agentId = "pc-admin-002",
       directPrint = true,
+      printerName,
+      paperSize = "A4",
     } = req.body; // ← Tambahkan parameter print
 
     console.log(
@@ -398,6 +408,8 @@ app.post("/print-loan", async (req, res) => {
           fileName: `loan-${loanId}.pdf`,
           originalJobId: loanId,
           timestamp: Date.now(),
+          printerName: printerName,
+          paperSize: paperSize,
         });
 
         // Simpan PDF sementara (optional, kalau queue besar bisa simpan di disk)
@@ -451,11 +463,11 @@ app.post("/api/print-pdf", async (req, res) => {
     const {
       pdfBase64,
       fileName,
-      agentId = "pc-admin-001",
+      agentId = "pc-admin-002",
       token,
       directPrint = true,
       printerName,
-      paperSize,
+      paperSize = "A4",
     } = req.body;
 
     // Validasi token sederhana (opsional)
@@ -550,7 +562,9 @@ app.post("/api/print-pdf", async (req, res) => {
           fileName: fileName || "document.pdf",
           originalJobId: `android-${Date.now()}`,
           timestamp: Date.now(),
-          type: "android-pdf", // Untuk tracking
+          type: "android-pdf",
+          printerName: printerName,
+          paperSize: paperSize,
         });
 
         // Simpan PDF ke disk untuk queue
@@ -720,6 +734,72 @@ app.delete("/queue/cancel/:jobId", (req, res) => {
   }
 
   res.json({ success: true, message: `Job ${jobId} cancelled` });
+});
+
+// Endpoint untuk retry job yang failed
+app.post("/queue/retry/:jobId", async (req, res) => {
+  try {
+    const { jobId } = req.params;
+    const { agentId } = req.body;
+
+    const job = printQueue.queue.find((j) => j.id === jobId);
+
+    if (!job) {
+      return res.status(404).json({ error: "Job not found" });
+    }
+
+    if (job.status !== "failed") {
+      return res
+        .status(400)
+        .json({ error: `Cannot retry job with status: ${job.status}` });
+    }
+
+    // Reset status
+    printQueue.updateJobStatus(jobId, "pending");
+
+    // Cek apakah agent online
+    const agentSocket = agents.get(agentId ?? job.agentId ?? "pc-admin-002");
+
+    if (agentSocket) {
+      // Langsung proses ulang
+      agentSocket.emit("print-command", {
+        jobId: `${job.jobId}-retry-${Date.now()}`,
+        pdfBase64: job.pdfBase64,
+        fileName: job.fileName,
+        printerName: job.printerName,
+        paperSize: job.paperSize,
+      });
+
+      const printPromise = new Promise((resolve, reject) => {
+        const retryJobId = `${job.jobId}-retry-${Date.now()}`;
+        pendingJobs.set(retryJobId, { resolve, reject });
+        setTimeout(() => {
+          if (pendingJobs.has(retryJobId)) {
+            pendingJobs.delete(retryJobId);
+            reject(new Error("Retry print timeout"));
+          }
+        }, 30000);
+      });
+
+      await printPromise;
+
+      res.json({
+        success: true,
+        message: "Job retried successfully",
+        mode: "direct",
+      });
+    } else {
+      res.json({
+        success: true,
+        message: "Job added to queue for retry",
+        mode: "queued",
+        queueId: jobId,
+      });
+    }
+  } catch (err) {
+    console.error("Error retrying job:", err);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============ START SERVER ============
