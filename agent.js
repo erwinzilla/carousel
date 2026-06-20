@@ -18,7 +18,7 @@ socket.on("connect", () => {
   console.log("✅ Terhubung ke VPS server");
   socket.emit("agent-register", {
     agentId: AGENT_ID,
-    printerName: "Printer Sharing Windows" || "Default Printer",
+    printerName: "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6" || "Default Printer",
     password: AGENT_PASSWORD,
   });
 });
@@ -29,7 +29,7 @@ socket.on("registered", (data) => {
 });
 
 socket.on("print-command", async (data) => {
-  const { jobId, pdfBase64, fileName } = data;
+  const { jobId, pdfBase64, fileName, printerName, paperSize } = data;
   const tempFile = path.join(__dirname, `temp_${jobId}.pdf`);
 
   try {
@@ -66,8 +66,8 @@ socket.on("print-command", async (data) => {
 
     // Cetak
     await print.print(tempFile, {
-      printer: "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6",
-      paperSize: "A4", // Ukuran kertas
+      printer: printerName ?? "\\\\DEPAN\\HP LaserJet Pro M402-M403 n-dne PCL 6",
+      paperSize: paperSize ?? "A4", // Ukuran kertas
       scale: "fit", // Sesuaikan halaman
       silent: true,
     });

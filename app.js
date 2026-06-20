@@ -453,7 +453,9 @@ app.post("/api/print-pdf", async (req, res) => {
       fileName,
       agentId = "pc-admin-001",
       token,
-      directPrint = true, // ← Tambahkan parameter ini
+      directPrint = true,
+      printerName,
+      paperSize,
     } = req.body;
 
     // Validasi token sederhana (opsional)
@@ -506,6 +508,8 @@ app.post("/api/print-pdf", async (req, res) => {
           jobId: jobId,
           pdfBase64: pdfBase64,
           fileName: fileName || "document.pdf",
+          printerName: printerName,
+          paperSize: paperSize,
         });
 
         const printPromise = new Promise((resolve, reject) => {
