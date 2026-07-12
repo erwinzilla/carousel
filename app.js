@@ -467,8 +467,10 @@ app.post("/print-part-sales", async (req, res) => {
       paperSize = "A4",
     } = req.body; // ← Tambahkan parameter print
 
+    const isDirectPrint = directPrint == true || directPrint == "true";
+
     console.log(
-      `📨 Received print-part-sales request: ${ticketId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
+      `📨 Received print-part-sales request: ${ticketId}, print mode: ${isDirectPrint ? "PRINT" : "ONLY PDF"}`,
     );
 
     const tempDir = path.join(__dirname, "temp");
@@ -486,7 +488,7 @@ app.post("/print-part-sales", async (req, res) => {
     }
 
     // ============ CEK MODE PRINT ============
-    if (directPrint === true || directPrint === "true") {
+    if (isDirectPrint) {
       // Mode PRINT
       const agentSocket = agents.get(agentId);
 
