@@ -323,7 +323,6 @@ app.post("/print-invoice", async (req, res) => {
   }
 });
 
-// Endpoint lama: /print-loan (dimodifikasi)
 app.post("/print-loan", async (req, res) => {
   try {
     const {
@@ -439,6 +438,139 @@ app.post("/print-loan", async (req, res) => {
       res.setHeader(
         "Content-Disposition",
         `inline; filename=loan-${unique}.pdf`,
+      );
+      res.sendFile(finalPath, (err) => {
+        if (err) console.error("SendFile error:", err);
+
+        setTimeout(() => {
+          fs.unlink(
+            finalPath,
+            (err) => err && console.error(`Failed delete: ${finalPath}`),
+          );
+        }, 5000);
+      });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message || "ERROR_GENERATE_PDF" });
+  }
+});
+
+app.post("/print-part-sales", async (req, res) => {
+  try {
+    const {
+      token,
+      ticketId,
+      agentId = "pc-admin-002",
+      directPrint = true,
+      printerName,
+      paperSize = "A4",
+    } = req.body; // ← Tambahkan parameter print
+
+    console.log(
+      `📨 Received print-part-sales request: ${ticketId}, print mode: ${directPrint ? "PRINT" : "ONLY PDF"}`,
+    );
+
+    const tempDir = path.join(__dirname, "temp");
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+    const unique = `${ticketId}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const finalPath = path.join(tempDir, `part-sales-${unique}.pdf`);
+
+    // Generate Tornado PDF
+    const partSalesUrl = `https://pts.erwinzilla.com/ticket/${ticketId}/sales?token=${token}`;
+    await generatePdf(partSalesUrl, finalPath);
+
+    if (!fs.existsSync(finalPath)) {
+      return res.status(500).json({ error: "PDF_NOT_FOUND" });
+    }
+
+    // ============ CEK MODE PRINT ============
+    if (directPrint === true || directPrint === "true") {
+      // Mode PRINT
+      const agentSocket = agents.get(agentId);
+
+      const pdfBuffer = fs.readFileSync(finalPath);
+      const pdfBase64 = pdfBuffer.toString("base64");
+
+      if (agentSocket) {
+        // === CASE 1: AGENT ONLINE → LANGSUNG PRINT ===
+        console.log(`✅ Agent ${agentId} online, printing immediately...`);
+
+        const printJobId = `part-sales-${ticketId}-${Date.now()}`;
+
+        agentSocket.emit("print-command", {
+          jobId: printJobId,
+          pdfBase64: pdfBase64,
+          fileName: `part-sales-${ticketId}.pdf`,
+        });
+
+        const printPromise = new Promise((resolve, reject) => {
+          pendingJobs.set(printJobId, { resolve, reject });
+
+          setTimeout(() => {
+            if (pendingJobs.has(printJobId)) {
+              pendingJobs.delete(printJobId);
+              reject(new Error("Print timeout"));
+            }
+          }, 120000);
+        });
+
+        await printPromise;
+
+        fs.unlink(
+          finalPath,
+          (err) => err && console.error(`Failed delete: ${finalPath}`),
+        );
+
+        res.json({
+          status: "success",
+          message: "Printed immediately",
+          mode: "direct",
+        });
+      } else {
+        // === CASE 2: AGENT OFFLINE → MASUKKAN KE QUEUE ===
+        console.log(`⚠️ Agent ${agentId} offline, adding to queue...`);
+
+        // Simpan ke queue
+        const queuedJob = printQueue.addJob({
+          jobId: ticketId,
+          agentId: agentId,
+          pdfBase64: pdfBase64,
+          fileName: `part-sales-${ticketId}.pdf`,
+          originalJobId: ticketId,
+          timestamp: Date.now(),
+          printerName: printerName,
+          paperSize: paperSize,
+        });
+
+        // Simpan PDF sementara (optional, kalau queue besar bisa simpan di disk)
+        const queuedPdfPath = path.join(
+          __dirname,
+          `queued_${queuedJob.id}.pdf`,
+        );
+        fs.copyFileSync(finalPath, queuedPdfPath);
+        queuedJob.pdfPath = queuedPdfPath;
+        printQueue.updateJobStatus(queuedJob.id, "pending");
+
+        fs.unlink(
+          finalPath,
+          (err) => err && console.error(`Failed delete: ${finalPath}`),
+        );
+
+        res.json({
+          status: "queued",
+          message: `Agent offline, job added to queue (position: ${printQueue.queue.length})`,
+          mode: "queued",
+          queueId: queuedJob.id,
+        });
+      }
+    } else {
+      // Mode PDF ONLY
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader(
+        "Content-Disposition",
+        `inline; filename=part-sales-${unique}.pdf`,
       );
       res.sendFile(finalPath, (err) => {
         if (err) console.error("SendFile error:", err);
@@ -659,7 +791,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Agent report print failed - FIXED: pake => bukan (
+  // Agent report print failed - FIXED: pakai => bukan (
   socket.on("print-failed", (data) => {
     const { jobId, error } = data;
     console.log(`❌ Print failed for job ${jobId}: ${error}`);
