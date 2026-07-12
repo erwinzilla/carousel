@@ -1,8 +1,6 @@
 const puppeteer = require("puppeteer");
 
 async function generatePdf(url, outputPath, paper = "A4") {
-  console.log("ACCESS URL: " + url);
-
   const browser = await puppeteer.launch({
     headless: "new",
     args: [
